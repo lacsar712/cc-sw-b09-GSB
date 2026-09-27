@@ -32,6 +32,28 @@ CREATE TABLE IF NOT EXISTS jobs (
 );
 """
 
+# 交班副本：冻结时点的待处理快照，只读，不随后续结案变化
+HANDOVER_SCHEMA = (
+    """
+    CREATE TABLE IF NOT EXISTS handovers (
+        id serial PRIMARY KEY,
+        created_by text NOT NULL,
+        created_at timestamptz NOT NULL,
+        item_count integer NOT NULL
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS handover_items (
+        id serial PRIMARY KEY,
+        handover_id integer NOT NULL REFERENCES handovers(id),
+        job_id integer NOT NULL,
+        lamp text NOT NULL,
+        nominal_nm double precision NOT NULL,
+        status text NOT NULL
+    )
+    """,
+)
+
 
 def connect():
     return psycopg.connect(DSN, row_factory=dict_row)
@@ -123,9 +145,69 @@ async def create_job(request: Request, data: JobIn) -> dict:
         return {"id": row["id"], "status": "pending"}
 
 
+@post("/api/handovers")
+async def create_handover(request: Request) -> dict:
+    user = user_from_request(request)
+    if user["role"] != "writer":
+        raise HTTPException(status_code=HTTP_403_FORBIDDEN, detail="仅校准员可交班")
+    with connect() as conn:
+        pending = conn.execute(
+            "SELECT id, lamp, nominal_nm, status FROM jobs WHERE status IN ('pending','claimed') ORDER BY id"
+        ).fetchall()
+        hid = conn.execute(
+            "INSERT INTO handovers(created_by, created_at, item_count) VALUES (%s,%s,%s) RETURNING id",
+            (user["username"], datetime.now(timezone.utc), len(pending)),
+        ).fetchone()["id"]
+        if pending:
+            conn.executemany(
+                "INSERT INTO handover_items(handover_id, job_id, lamp, nominal_nm, status) VALUES (%s,%s,%s,%s,%s)",
+                [(hid, r["id"], r["lamp"], r["nominal_nm"], r["status"]) for r in pending],
+            )
+        conn.commit()
+        handover = conn.execute(
+            "SELECT id, created_by, created_at, item_count FROM handovers WHERE id = %s", (hid,)
+        ).fetchone()
+    return {
+        **handover,
+        "items": [
+            {"job_id": r["id"], "lamp": r["lamp"], "nominal_nm": r["nominal_nm"], "status": r["status"]}
+            for r in pending
+        ],
+    }
+
+
+@get("/api/handovers")
+async def list_handovers(request: Request) -> list:
+    user_from_request(request)
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT id, created_by, created_at, item_count FROM handovers ORDER BY id DESC"
+        ).fetchall()
+        return list(rows)
+
+
+@get("/api/handovers/{handover_id:int}")
+async def get_handover(request: Request, handover_id: int) -> dict:
+    user_from_request(request)
+    with connect() as conn:
+        handover = conn.execute(
+            "SELECT id, created_by, created_at, item_count FROM handovers WHERE id = %s",
+            (handover_id,),
+        ).fetchone()
+        if not handover:
+            raise HTTPException(status_code=404, detail="副本不存在")
+        items = conn.execute(
+            "SELECT job_id, lamp, nominal_nm, status FROM handover_items WHERE handover_id = %s ORDER BY job_id",
+            (handover_id,),
+        ).fetchall()
+        return {**handover, "items": list(items)}
+
+
 def on_startup() -> None:
     with connect() as conn:
         conn.execute(SCHEMA)
+        for stmt in HANDOVER_SCHEMA:
+            conn.execute(stmt)
         n = conn.execute("SELECT COUNT(*) AS n FROM jobs").fetchone()["n"]
         if n == 0:
             now = datetime.now(timezone.utc)
@@ -141,4 +223,7 @@ def on_startup() -> None:
         conn.commit()
 
 
-app = Litestar(route_handlers=[health, login, list_jobs, get_job, create_job], on_startup=[on_startup])
+app = Litestar(
+    route_handlers=[health, login, list_jobs, get_job, create_job, create_handover, list_handovers, get_handover],
+    on_startup=[on_startup],
+)
