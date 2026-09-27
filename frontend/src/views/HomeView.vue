@@ -2,6 +2,7 @@
 import { onMounted, onUnmounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { api } from '../api.js'
+import { statusLabel } from '../status.js'
 
 const router = useRouter()
 const role = ref(localStorage.getItem('role') || '')
@@ -69,7 +70,7 @@ onUnmounted(() => clearInterval(timer))
           <td>{{ j.lamp }}</td>
           <td>{{ j.nominal_nm }}</td>
           <td>{{ j.measured_nm }}</td>
-          <td>{{ j.status }}</td>
+          <td>{{ statusLabel(j.status) }}</td>
           <td>{{ j.verdict }}</td>
           <td>{{ j.reason }}</td>
         </tr>

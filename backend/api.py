@@ -30,6 +30,19 @@ CREATE TABLE IF NOT EXISTS jobs (
     created_by text NOT NULL,
     created_at timestamptz NOT NULL
 );
+CREATE TABLE IF NOT EXISTS handovers (
+    id serial PRIMARY KEY,
+    created_by text NOT NULL,
+    created_at timestamptz NOT NULL
+);
+CREATE TABLE IF NOT EXISTS handover_items (
+    id serial PRIMARY KEY,
+    handover_id integer NOT NULL REFERENCES handovers(id) ON DELETE CASCADE,
+    job_id integer NOT NULL,
+    lamp text NOT NULL,
+    nominal_nm double precision NOT NULL,
+    status text NOT NULL
+);
 """
 
 
@@ -123,6 +136,66 @@ async def create_job(request: Request, data: JobIn) -> dict:
         return {"id": row["id"], "status": "pending"}
 
 
+@post("/api/handovers")
+async def create_handover(request: Request) -> dict:
+    user = user_from_request(request)
+    if user["role"] != "writer":
+        raise HTTPException(status_code=HTTP_403_FORBIDDEN, detail="仅校准员可交班")
+    with connect() as conn:
+        head = conn.execute(
+            "INSERT INTO handovers(created_by, created_at) VALUES (%s, %s) RETURNING id",
+            (user["username"], datetime.now(timezone.utc)),
+        ).fetchone()
+        items = conn.execute(
+            """
+            INSERT INTO handover_items(handover_id, job_id, lamp, nominal_nm, status)
+            SELECT %s, id, lamp, nominal_nm, status FROM jobs
+            WHERE status IN ('pending', 'claimed')
+            ORDER BY id
+            RETURNING job_id, lamp, nominal_nm, status
+            """,
+            (head["id"],),
+        ).fetchall()
+        conn.commit()
+        return {"id": head["id"], "item_count": len(items), "items": list(items)}
+
+
+@get("/api/handovers")
+async def list_handovers(request: Request) -> list:
+    user_from_request(request)
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT h.id, h.created_by, h.created_at, COUNT(i.id) AS item_count
+            FROM handovers h
+            LEFT JOIN handover_items i ON i.handover_id = h.id
+            GROUP BY h.id
+            ORDER BY h.id DESC
+            """
+        ).fetchall()
+        return list(rows)
+
+
+@get("/api/handovers/{handover_id:int}")
+async def get_handover(request: Request, handover_id: int) -> dict:
+    user_from_request(request)
+    with connect() as conn:
+        head = conn.execute(
+            "SELECT id, created_by, created_at FROM handovers WHERE id = %s",
+            (handover_id,),
+        ).fetchone()
+        if not head:
+            raise HTTPException(status_code=404, detail="交班副本不存在")
+        items = conn.execute(
+            """
+            SELECT job_id, lamp, nominal_nm, status FROM handover_items
+            WHERE handover_id = %s ORDER BY job_id
+            """,
+            (handover_id,),
+        ).fetchall()
+        return {**head, "items": list(items)}
+
+
 def on_startup() -> None:
     with connect() as conn:
         conn.execute(SCHEMA)
@@ -141,4 +214,7 @@ def on_startup() -> None:
         conn.commit()
 
 
-app = Litestar(route_handlers=[health, login, list_jobs, get_job, create_job], on_startup=[on_startup])
+app = Litestar(
+    route_handlers=[health, login, list_jobs, get_job, create_job, create_handover, list_handovers, get_handover],
+    on_startup=[on_startup],
+)

@@ -2,6 +2,7 @@
 import { onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { api } from '../api.js'
+import { statusLabel } from '../status.js'
 
 const route = useRoute()
 const router = useRouter()
@@ -33,7 +34,7 @@ watch(() => route.params.id, load)
       <p>灯种：{{ job.lamp }}</p>
       <p>标称 nm：{{ job.nominal_nm }}</p>
       <p>实测 nm：{{ job.measured_nm }}</p>
-      <p>状态：{{ job.status }}</p>
+      <p>状态：{{ statusLabel(job.status) }}</p>
       <p>结论：{{ job.verdict }}</p>
       <p>理由：{{ job.reason }}</p>
     </section>

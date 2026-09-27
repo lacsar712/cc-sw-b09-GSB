@@ -17,8 +17,25 @@ def connect():
 def claim_one(conn):
     row = conn.execute(
         """
-        SELECT id, nominal_nm, measured_nm FROM jobs
+        SELECT id FROM jobs
         WHERE status='pending'
+        ORDER BY id
+        FOR UPDATE SKIP LOCKED
+        LIMIT 1
+        """
+    ).fetchone()
+    if not row:
+        return None
+    conn.execute("UPDATE jobs SET status='claimed' WHERE id=%s", (row["id"],))
+    conn.commit()
+    return row["id"]
+
+
+def finish_one(conn):
+    row = conn.execute(
+        """
+        SELECT id, nominal_nm, measured_nm FROM jobs
+        WHERE status='claimed'
         ORDER BY id
         FOR UPDATE SKIP LOCKED
         LIMIT 1
@@ -38,6 +55,8 @@ def claim_one(conn):
 def main():
     while True:
         try:
+            with connect() as conn:
+                finish_one(conn)
             with connect() as conn:
                 claim_one(conn)
         except Exception as exc:

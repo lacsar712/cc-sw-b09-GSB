@@ -13,6 +13,8 @@ const loginForm = ref({ username: 'calibrator', password: 'calib123456' })
 
 const isHome = computed(() => route.path === '/')
 const isDetail = computed(() => route.path.startsWith('/jobs/'))
+const isHandovers = computed(() => route.path === '/handovers')
+const isHandoverDetail = computed(() => route.path.startsWith('/handovers/'))
 
 async function login() {
   err.value = ''
@@ -57,6 +59,14 @@ function logout() {
           :class="{ active: isDetail }"
           title="请从总表点击任务行进入"
         >任务详情</span>
+        <span class="nav-sep">|</span>
+        <router-link to="/handovers" :class="{ active: isHandovers }">交班台</router-link>
+        <span class="nav-sep">|</span>
+        <span
+          class="nav-hint"
+          :class="{ active: isHandoverDetail }"
+          title="请从交班台点击副本行进入"
+        >副本明细</span>
       </nav>
       <div class="user-area">
         <span>{{ user }}（{{ role }}）</span>
